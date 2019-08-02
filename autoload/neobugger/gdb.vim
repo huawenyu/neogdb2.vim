@@ -40,140 +40,26 @@ endif
 "        type 'pid', 'bin-exe', {'pid': 3245}
 "        type 'server', 'bin-exe', {'args': [list]}
 function! neobugger#gdb#New(conf, binaryFile, args)
-    "{
     let l:__func__ = substitute(expand('<sfile>'), '.*\(\.\.\|\s\)', '', '')
-    if neobugger#Exists(s:module)
-        throw 'neobugger['.s:module.' already running!'
-    endif
-
-    if !filereadable(a:binaryFile)
-        throw l:__func__. " error: no program '". a:binaryFile ."'."
-    endif
-
-    let server_addr = (a:0 >= 2) ? a:2 : ''
-
-    let l:f_conf = 'neobugger#gdb#'.a:conf.'#Conf'
-    let Conf = function(l:f_conf)
-    if empty(Conf)
-        throw l:__func__. " error: no Conf '". a:conf ."' from ".l:f_conf
-    endif
-    let conf = Conf()
-    if type(conf) != type({})
-        throw l:__func__. " error: Conf '". a:conf ."' should return a dict not ". type(conf). "."
-    endif
 
     let l:parent = s:prototype.New(a:0 >= 1 ? a:1 : {})
     let l:abstract = neobugger#std#New()
     call l:parent.Inherit(l:abstract)
 
-    if has_key(conf, 'Inherit')
-        let l:ChildNew = function(conf.Inherit)
-        let l:child = l:ChildNew()
-        call l:child.Inherit(l:parent)
-        let gdb = l:child
-    else
-        let gdb = l:parent
-    endif
-
+    let gdb = l:parent
     let gdb.module = s:module
     let gdb._initialized = 0
-    let gdb._mode = a:conf
-    let gdb._binaryFile = a:binaryFile
     let gdb.args = a:args
     silent! call s:log.info(l:__func__, ": args=", string(a:args))
 
-    let gdb._autorun = 0
-    if has_key(conf, 'autorun')
-        let gdb._autorun = conf.autorun
-    endif
-
-    let gdb._reconnect = 0
-    if has_key(conf, 'reconnect')
-        let gdb._reconnect = conf.reconnect
-    endif
-
     let gdb._showbreakpoint = 0
-    if exists('g:neogdb_window')
-        if index(g:neogdb_window, 'breakpoint') >= 0
-            let gdb._showbreakpoint = 1
-            if has_key(conf, 'conf_gdb_layout')
-                let conf.conf_gdb_layout = ['vsp']
-            endif
-        endif
-    else
-        if has_key(conf, 'showbreakpoint')
-            let gdb._showbreakpoint = conf.showbreakpoint
-        endif
-    endif
-
     let gdb._showbacktrace = 0
-    if exists('g:neogdb_window')
-        if index(g:neogdb_window, 'backtrace') >= 0
-            let gdb._showbacktrace = 1
-            if has_key(conf, 'conf_gdb_layout')
-                let conf.conf_gdb_layout = ['vsp']
-            endif
-        endif
-    else
-        if has_key(conf, 'showbacktrace')
-            let gdb._showbacktrace = conf.showbacktrace
-        endif
-    endif
 
-    if len(conf.conf_gdb_cmd) >= 2
-        if !empty(a:binaryFile)
-            let conf.conf_gdb_cmd[1] = a:binaryFile
-        endif
-    endif
-
-    let gdb._server_addr = []
-    let gdb._attach_pid = "NoAttachedPid"
-    if a:conf == "pid"
-        if !get(a:args,'pid')
-            throw l:__func__. " error: attach pid, but no pid."
-        endif
-        "let conf.conf_gdb_cmd[1] = a:args.pid
-        let gdb._attach_pid = a:args.pid
-    elseif a:conf == "server"
-        if !has_key(a:args,'args') "Attach to gdbserver
-            throw l:__func__. " error: attach pid, but no gdbserver."
-        endif
-        "call l:debugger.writeLine('target remote '.a:args.con)
-        " 10.1.1.125:444 -> ["10.1.1.125", "444"]
-        let gdb._server_addr = split(a:args.args[0], ":")
-    endif
-
-    " Load all files from backtrace to solve relative-path
     silent! call s:log.trace("Load open files ...")
-
-    "if gdb._showbacktrace && filereadable(s:gdb_bt_qf)
-    "    exec "cgetfile " . s:gdb_bt_qf
-    "    let list = getqflist()
-    "    for i in range(len(list))
-    "        if has_key(list[i], 'bufnr')
-    "            let list[i].filename = fnamemodify(bufname(list[i].bufnr), ':p:.')
-    "            unlet list[i].bufnr
-    "        else
-    "            let list[i].filename = fnamemodify(list[i].filename, ':p:.')
-    "        endif
-    "        if filereadable(list[i].filename)
-    "            exec "e ". list[i].filename
-    "        endif
-    "    endfor
-    "    "silent! call s:log.trace("old backtrace:<cr>", list)
-    "endif
-
     silent! call s:log.trace("  try open files from ". s:fl_file)
-    if filereadable(s:fl_file)
-        call gdb.ReadVariable("s:file_list", s:fl_file)
-        for [next_key, next_val] in items(s:file_list)
-            if filereadable(next_key)
-                exec "e ". fnamemodify(next_key, ':p:.')
-            endif
-        endfor
-    endif
 
     " window number that will be displaying the current file
+    let gdb._wid_main = win_getid()
     let gdb._jump_window = 1
     let gdb._current_buf = -1
     let gdb._current_line = -1
@@ -183,40 +69,8 @@ function! neobugger#gdb#New(conf, binaryFile, args)
     let gdb._gdb_break_qf = s:gdb_break_qf
     let cword = expand("<cword>")
 
-    call nelib#state#Open(conf)
-    if !exists('g:state_ctx')
-        silent! call s:log.trace("  nelib#state#Open() fail: 'g:state_ctx' not exist.")
-        return
-    endif
-    if !has_key(g:state_ctx, 'window')
-        silent! call s:log.trace("  nelib#state#Open() fail: the dict[window] not exist.")
-        return
-    endif
-    " MustExist: Gdb window
-    if has_key(g:state_ctx.window, 'gdb')
-        let win_gdb = g:state_ctx.window['gdb']
-        let gdb._win_gdb = win_gdb
-        let gdb._client_id = win_gdb._client_id
-    else
-        silent! call s:log.trace("  nelib#state#Open() fail: the window 'gdb' not exist in dict[window].")
-        return
-    endif
-
-
-    if has_key(g:state_ctx.window, 'gdbserver')
-        let win_gdbserver = g:state_ctx.window['gdbserver']
-        let gdb._win_gdbserver = win_gdbserver
-        let gdb._server_id = win_gdbserver._client_id
-    endif
-
-    if has_key(g:state_ctx.window, 'job')
-        let win_job = g:state_ctx.window['job']
-        let gdb._win_job = win_job
-        let gdb._job_id = win_job._client_id
-    endif
-
     " Create quickfix: lgetfile, cgetfile
-    if gdb._showbacktrace && win_gotoid(g:state_ctx._wid_main) == 1
+    if gdb._showbacktrace && win_gotoid(gdb._wid_main) == 1
         if !filereadable(gdb._gdb_bt_qf)
             exec "silent! vimgrep " . cword ." ". expand("%")
         else
@@ -226,7 +80,7 @@ function! neobugger#gdb#New(conf, binaryFile, args)
         let gdb._win_qf = win_getid()
     endif
 
-    if gdb._showbreakpoint && win_gotoid(g:state_ctx._wid_main) == 1
+    if gdb._showbreakpoint && win_gotoid(gdb._wid_main) == 1
         if !filereadable(gdb._gdb_break_qf)
             exec "silent! lvimgrep " . cword ." ". expand("%")
         else
@@ -236,23 +90,15 @@ function! neobugger#gdb#New(conf, binaryFile, args)
         let gdb._win_lqf = win_getid()
     endif
 
-    " Create gdb terminal
-    if win_gotoid(gdb._win_gdb._wid) == 1
-        let gdb._server_buf = -1
-        let gdb._client_buf = bufnr('%')
-        call gdb.Map("tmap")
-    endif
 
-    if win_gotoid(g:state_ctx._wid_main) == 1
+    if win_gotoid(gdb._wid_main) == 1
         stopinsert
         call gdb.Map("nmap")
         return gdb
     else
-        silent! call s:log.trace("  nelib#state#Open() fail: Cann't jump back 'main' window.")
+        silent! call s:log.trace("  Cann't jump back 'main' window.")
     endif
-    "}
 endfunction
-
 
 " @mode 0 refresh-all, 1 only-change
 function! s:prototype.RefreshBreakpointSigns(mode)
@@ -307,6 +153,11 @@ endfunction
 function! s:prototype.Send(data)
     let l:__func__ = "gdb.Send"
     silent! call s:log.trace(l:__func__. "[". string(self._client_id). "] args=". string(a:data))
+
+    if exists("g:gdb_channel_id")
+        call rpcnotify(g:gdb_channel_id, a:data)
+    endif
+    return
 
     if self._win_gdb._state.name ==# "pause" || self._win_gdb._state.name ==# "init"
         call jobsend(self._client_id, a:data."\<cr>")
@@ -452,8 +303,8 @@ function! s:prototype.Jump(file, line)
 
 
     let cwindow = win_getid()
-    if cwindow != g:state_ctx._wid_main
-        if win_gotoid(g:state_ctx._wid_main) != 1
+    if cwindow != gdb._wid_main
+        if win_gotoid(gdb._wid_main) != 1
             return
         endif
     endif
@@ -478,7 +329,7 @@ function! s:prototype.Jump(file, line)
     "exec ':' a:line | m'
 
     let self._current_line = a:line
-    if cwindow != g:state_ctx._wid_main
+    if cwindow != gdb._wid_main
         call win_gotoid(cwindow)
     endif
     call self.Update_current_line_sign(1)
@@ -648,14 +499,11 @@ function! s:prototype.FrameDown()
 endfunction
 
 function! s:prototype.Next()
-    call self.Send("n")
-    if self._mode == "pid"
-        call self.Send("where")
-    endif
+    call self.Send("next")
 endfunction
 
 function! s:prototype.Step()
-    call self.Send("s")
+    call self.Send("step")
 endfunction
 
 function! s:prototype.Eval(expr)
