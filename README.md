@@ -267,3 +267,6 @@ endfunc
 
 # License
 Vim license, see LICENSE
+
+= Neogdb2 | project:neogdb =
+* [ ] key maps  #48502517

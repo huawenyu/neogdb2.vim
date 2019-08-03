@@ -34,21 +34,61 @@ if !exists("s:init")
 endif
 
 
-" Constructor
-" @param conf='local|pid|server'
-"        type 'local', 'bin-exe', {'args': [list]}
-"        type 'pid', 'bin-exe', {'pid': 3245}
-"        type 'server', 'bin-exe', {'args': [list]}
-function! neobugger#gdb#New(conf, binaryFile, args)
-    let l:__func__ = substitute(expand('<sfile>'), '.*\(\.\.\|\s\)', '', '')
+function! neobugger#gdb#Handle(handle, ...)
+    let l:__func__ = "neobugger#gdb#Handle"
 
-    let l:parent = s:prototype.New(a:0 >= 1 ? a:1 : {})
+    try
+        if exists('g:gdbserver') && g:gdbserver.RespondTo(a:handle)
+            silent! call s:log.info(l:__func__, ': ', a:handle, '(args=', a:000,') ')
+            let l:args = a:000
+            if len(a:000) > 0
+                if type(a:000[0]) == type([])
+                    let l:args = a:000[0]
+                endif
+            endif
+            call call(g:gdbserver[a:handle], l:args, g:gdbserver)
+            "call g:gdbserver.Call(a:handle, l:args)
+            return
+        else
+            silent! call s:log.info("Handler ".a:handle. "() not existed!")
+            echomsg l:__func__. "Handler ".a:handle. "() not existed. Please :GdbStart."
+        endif
+    catch
+        silent! call s:log.info("Handler: ".a:handle. "() error:", string(v:exception))
+        echomsg l:__func__. ' Handler: '.a:handle. "() error:". v:exception
+    endtry
+endfunction
+
+function! neobugger#gdb#Update(...)
+    let l:__func__ = "neobugger#gdb#Update"
+    silent! call s:log.info(l:__func__, ': ', '(args=', a:000,') ')
+
+    if exists('g:gdbserver')
+        call g:gdbserver.Jump(a:1, a:2)
+    endif
+endfunction
+
+" Constructor
+" @param serveraddr
+function! neobugger#gdb#New(args)
+    let l:__func__ = substitute(expand('<sfile>'), '.*\(\.\.\|\s\)', '', '')
+    if exists('g:gdbserver')
+        echomsg "Nbgdb already started."
+        return
+    endif
+
+    let l:parent = s:prototype.New({})
     let l:abstract = neobugger#std#New()
     call l:parent.Inherit(l:abstract)
 
     let gdb = l:parent
     let gdb.module = s:module
     let gdb._initialized = 0
+    if a:0 >= 1
+        let gdb._serveraddr = a:1
+    else
+        let gdb._serveraddr = g:neobugger_addr
+    endif
     let gdb.args = a:args
     silent! call s:log.info(l:__func__, ": args=", string(a:args))
 
@@ -93,11 +133,38 @@ function! neobugger#gdb#New(conf, binaryFile, args)
 
     if win_gotoid(gdb._wid_main) == 1
         stopinsert
+        "call serverstart(gdb._serveraddr)
         call gdb.Map("nmap")
-        return gdb
+        let g:gdbserver = deepcopy(gdb)
+        return g:gdbserver
     else
         silent! call s:log.trace("  Cann't jump back 'main' window.")
     endif
+endfunction
+
+function! s:prototype.Event(evt_name, ...)
+    let l:__func__ = "Handler Event"
+
+    try
+        if exists('g:gdbserver') && g:gdbserver.RespondTo(a:evt_name)
+            silent! call s:log.info(l:__func__, ': ', a:evt_name, '(args=', a:000,') ')
+            let l:args = a:000
+            if len(a:000) > 0
+                if type(a:000[0]) == type([])
+                    let l:args = a:000[0]
+                endif
+            endif
+            call call(g:gdbserver[a:evt_name], l:args, g:gdbserver)
+            "call g:gdbserver.Call(a:handle, l:args)
+            return
+        else
+            silent! call s:log.info("Handler ".a:evt_name. "() not existed!")
+            echomsg l:__func__. "Handler ".a:evt_name. "() not existed. Please :GdbStart."
+        endif
+    catch
+        silent! call s:log.info("Handler: ".a:evt_name. "() error:", string(v:exception))
+        echomsg l:__func__. ' Handler: '.a:evt_name. "() error:". v:exception
+    endtry
 endfunction
 
 " @mode 0 refresh-all, 1 only-change
@@ -146,7 +213,6 @@ function! s:prototype.Kill()
     endif
     exe 'tabnext '. self._tab
     tabclose
-    neobugger#Remove(self.module)
 endfunction
 
 
@@ -156,13 +222,6 @@ function! s:prototype.Send(data)
 
     if exists("g:gdb_channel_id")
         call rpcnotify(g:gdb_channel_id, a:data)
-    endif
-    return
-
-    if self._win_gdb._state.name ==# "pause" || self._win_gdb._state.name ==# "init"
-        call jobsend(self._client_id, a:data."\<cr>")
-    else
-        silent! call s:log.error(l:__func__, ": Cann't send data when state='". self._win_gdb._state.name. "'")
     endif
 endfunction
 
@@ -196,7 +255,6 @@ function! s:prototype.Attach()
     if !empty(self._server_addr)
         call self.Send(printf('target remote %s',
                     \join(self._server_addr, ":")))
-        call state#Switch('gdb', 'remoteconn', 0)
     endif
 endfunction
 
@@ -219,19 +277,7 @@ endfunction
 " Then add breakpoints backto gdb
 " @mode 0 reset-all, 1 enable-only-change, 2 delete-all
 function! s:prototype.RefreshBreakpoints(mode)
-    "{
-    if !neobugger#Exists(s:module)
-        throw 'Gdb is not running'
-    endif
-
     let is_running = 0
-    if self._win_gdb._state.name ==# "running"
-        " pause first
-        let is_running = 1
-        call jobsend(self._client_id, "\<c-c>")
-        call state#Switch('gdb', 'pause', 0)
-    endif
-
     if a:mode == 0 || a:mode == 2
         if self._has_breakpoints
             call self.Send('delete')
@@ -266,27 +312,12 @@ function! s:prototype.RefreshBreakpoints(mode)
     if is_running
         call self.Send('c')
     endif
-    "}
 endfunction
 
 
 function! s:prototype.Jump(file, line)
-    if !neobugger#Exists(s:module)
-        throw 'Gdb is not running'
-    endif
-    if tabpagenr() != g:state_ctx._tab
-        " Don't jump if we are not in the debugger tab
-        return
-    endif
-
-    let file = a:file
-    if !filereadable(file) && file[0] != '/'
-        let file = '/' . file
-    endif
-    if !filereadable(file)
-        silent! call s:log.error("Jump File not exist: " . file)
-    endif
-
+    let l:__func__ = "Handler: Jump"
+    silent! call s:log.info(l:__func__, '(', a:file, ':', a:line, ') ')
 
     " Method-1: Using ansync job to parse response
     "if filereadable(s:gdb_bt_qf)
@@ -301,10 +332,9 @@ function! s:prototype.Jump(file, line)
         call delete(s:gdb_bt_qf)
     endif
 
-
     let cwindow = win_getid()
-    if cwindow != gdb._wid_main
-        if win_gotoid(gdb._wid_main) != 1
+    if cwindow != g:gdbserver._wid_main
+        if win_gotoid(g:gdbserver._wid_main) != 1
             return
         endif
     endif
@@ -329,7 +359,7 @@ function! s:prototype.Jump(file, line)
     "exec ':' a:line | m'
 
     let self._current_line = a:line
-    if cwindow != gdb._wid_main
+    if cwindow != g:gdbserver._wid_main
         call win_gotoid(cwindow)
     endif
     call self.Update_current_line_sign(1)
@@ -337,9 +367,6 @@ endfunction
 
 
 function! s:prototype.Breakpoints(file)
-    if !neobugger#Exists(s:module)
-        throw 'Gdb is not running'
-    endif
     if self._showbreakpoint && filereadable(a:file)
         exec "silent lgetfile " . a:file
     endif
@@ -347,9 +374,6 @@ endfunction
 
 
 function! s:prototype.Stack(file)
-    if !neobugger#Exists(s:module)
-        throw 'Gdb is not running'
-    endif
     if self._showbacktrace && filereadable(a:file)
         exec "silent! cgetfile " . a:file
     endif
@@ -357,9 +381,6 @@ endfunction
 
 
 function! s:prototype.Interrupt()
-    if !neobugger#Exists(s:module)
-        throw 'Gdb is not running'
-    endif
     call jobsend(self._client_id, "\<c-c>info line\<cr>")
 endfunction
 
@@ -507,30 +528,16 @@ function! s:prototype.Step()
 endfunction
 
 function! s:prototype.Eval(expr)
-    if !neobugger#Exists(s:module)
-        throw 'Gdb is not running'
-    endif
+    call self.Send(printf('print %s', a:expr))
 
-    if self._win_gdb._state.name !=# "pause"
-        throw 'Gdb eval only under "pause" but state="'
-                \. self._win_gdb._state.name .'"'
-    endif
-
-    "call self.Send(printf('print %s', a:expr))
-    " Enable smart-eval base-on the special project
-    let s:expr = a:expr
-    call self.Send(printf('whatis %s', a:expr))
+    "" Enable smart-eval base-on the special project
+    "let s:expr = a:expr
+    "call self.Send(printf('whatis %s', a:expr))
 endfunction
 
 
 " Enable smart-eval base-on the special project
 function! s:prototype.Whatis(type)
-    if !neobugger#Exists(s:module)
-        throw 'Gdb is not running'
-    endif
-    if self._win_gdb._state.name !=# "pause"
-        throw 'Gdb eval only under "pause" state'
-    endif
     if empty(s:expr)
         throw 'Gdb eval expr is empty'
     endif
@@ -581,7 +588,6 @@ function! s:prototype.on_load_bt(...)
 endfunction
 
 function! s:prototype.on_continue(...)
-    call state#Switch('gdb', 'running', 0)
     call self.Update_current_line_sign(0)
 endfunction
 
@@ -589,13 +595,6 @@ function! s:prototype.on_jump(file, line, ...)
     let l:__func__ = "gdb.on_jump"
     silent! call s:log.info(l:__func__, ' open ', a:file, ':', a:line)
 
-    if self._win_gdb._state.name !=# "pause"
-        silent! call s:log.info(gdb)
-        silent! call s:log.info("State ", self._win_gdb._state.name, " => pause")
-        call state#Switch('gdb', 'pause', 0)
-        call self.Send('parser_bt')
-        call self.Send('info line')
-    endif
     call self.Jump(a:file, a:line)
 endfunction
 
@@ -616,17 +615,7 @@ function! s:prototype.on_retry(...)
     call self.Send('continue')
 endfunction
 
-
-function! s:prototype.on_init(...)
-    let l:__func__ = "gdb.on_init"
-    silent! call s:log.info(l:__func__, " args=", string(a:000))
-
-    if self._initialized
-      silent! call s:log.warn(l:__func__, "() ignore re-initial!")
-      return
-    endif
-
-    let self._initialized = 1
+function! s:prototype.init_gdb_env()
     " set filename-display absolute
     " set remotetimeout 50
     let cmdstr = "set confirm off\n
@@ -701,6 +690,20 @@ function! s:prototype.on_init(...)
                 \ end"
     call self.Send(cmdstr)
 
+endfunction
+
+function! s:prototype.on_init(...)
+    let l:__func__ = "gdb.on_init"
+    silent! call s:log.info(l:__func__, " args=", string(a:000))
+
+    if self._initialized
+      silent! call s:log.warn(l:__func__, "() ignore re-initial!")
+      return
+    endif
+
+    let self._initialized = 1
+    "call self.init_gdb_env()
+
     silent! call s:log.info("Load breaks ...")
     if filereadable(s:brk_file)
         call self.ReadVariable("s:breakpoints", s:brk_file)
@@ -738,8 +741,6 @@ function! s:prototype.on_init(...)
             call self.Send("bt")
         endif
     endif
-
-    call state#Switch('gdb', 'pause', 0)
 endfunction
 
 
@@ -753,12 +754,11 @@ endfunction
 
 function s:prototype.on_remote_debugging(...)
     let self._remote_debugging = 1
-    call state#Switch('gdb', 'pause', 0)
 endfunction
 
 
 function! s:prototype.on_remoteconn_succ(...)
-    call state#Switch('gdb', 'pause', 0)
+    let self._remote_debugging = 1
 endfunction
 
 
@@ -768,7 +768,7 @@ endfunction
 
 
 function! s:prototype.on_pause(...)
-    call state#Switch('gdb', 'pause', 0)
+    let self._remote_debugging = 1
 endfunction
 
 
@@ -787,23 +787,36 @@ function! s:prototype.on_exit(...)
 endfunction
 
 
+function! s:prototype.view_source(...)
+    let self._remote_debugging = 1
+endfunction
+
+function! s:prototype.view_breakpoint(...)
+    let self._remote_debugging = 1
+endfunction
+
+function! s:prototype.view_stack(...)
+    let self._remote_debugging = 1
+endfunction
+
+
 function! s:prototype.Map(type)
     "{
     if a:type ==# "unmap"
-        exe 'unmap ' . g:gdb_keymap_refresh
-        exe 'unmap ' . g:gdb_keymap_continue
-        exe 'unmap ' . g:gdb_keymap_next
-        exe 'unmap ' . g:gdb_keymap_step
-        exe 'unmap ' . g:gdb_keymap_finish
-        exe 'unmap ' . g:gdb_keymap_clear_break
-        exe 'unmap ' . g:gdb_keymap_debug_stop
-        exe 'unmap ' . g:gdb_keymap_until
-        exe 'unmap ' . g:gdb_keymap_toggle_break
-        exe 'unmap ' . g:gdb_keymap_toggle_break_all
+        exe 'unmap '  . g:gdb_keymap_refresh
+        exe 'unmap '  . g:gdb_keymap_continue
+        exe 'unmap '  . g:gdb_keymap_next
+        exe 'unmap '  . g:gdb_keymap_step
+        exe 'unmap '  . g:gdb_keymap_finish
+        exe 'unmap '  . g:gdb_keymap_clear_break
+        exe 'unmap '  . g:gdb_keymap_debug_stop
+        exe 'unmap '  . g:gdb_keymap_until
+        exe 'unmap '  . g:gdb_keymap_toggle_break
+        exe 'unmap '  . g:gdb_keymap_toggle_break_all
         exe 'vunmap ' . g:gdb_keymap_toggle_break
         exe 'cunmap ' . g:gdb_keymap_toggle_break
-        exe 'unmap ' . g:gdb_keymap_frame_up
-        exe 'unmap ' . g:gdb_keymap_frame_down
+        exe 'unmap '  . g:gdb_keymap_frame_up
+        exe 'unmap '  . g:gdb_keymap_frame_down
         exe 'tunmap ' . g:gdb_keymap_refresh
         exe 'tunmap ' . g:gdb_keymap_continue
         exe 'tunmap ' . g:gdb_keymap_next

@@ -3,49 +3,36 @@ if exists("g:loaded_neovim_gdb") || &cp
 endif
 let g:loaded_neovim_gdb = 1
 
-
 if has("nvim")
 else
     finish
 endif
 
-
 " InstanceGdb {{{1
-command! -nargs=+ -complete=file Nbgdb call neobugger#New('gdb', 'local', [<f-args>][0], {'args' : [<f-args>][1:]})
-function! s:attachGDB(binaryFile, args)
-    if len(a:args.args) >= 1
-        if a:args.args[0] =~ '\v^\d+$'
-            call neobugger#New('gdb', 'pid', a:binaryFile, {'pid': str2nr(a:args.args[0])})
-        else
-            call neobugger#New('gdb', 'server', a:binaryFile, {'args': a:args.args})
-        endif
-    else
-        throw "Can't call Nbgdbattach with ".a:0." arguments"
-    endif
-endfunction
-command! -nargs=+ -complete=file Nbgdbattach call s:attachGDB([<f-args>][0], {'args' : [<f-args>][1:]})
+command! -nargs=+ GdbStart          call neobugger#gdb#New(<f-args>)
+command! -nargs=+ GdbUpdate         call neobugger#gdb#Update(<f-args>)
+command! -nargs=+ GdbEvent          call neobugger#gdb#Handle('Event', <f-args>)
 
+command! -nargs=0 GdbDebugStop      call neobugger#gdb#Handle('Kill')
+command! -nargs=0 GdbToggleBreak    call neobugger#gdb#Handle('ToggleBreak')
+command! -nargs=0 GdbToggleBreakAll call neobugger#gdb#Handle('ToggleBreakAll')
+command! -nargs=0 GdbClearBreak     call neobugger#gdb#Handle('ClearBreak')
+command! -nargs=0 GdbContinue       call neobugger#gdb#Handle('Send',  'continue')
+command! -nargs=0 GdbNext           call neobugger#gdb#Handle('Next')
+command! -nargs=0 GdbStep           call neobugger#gdb#Handle('Step')
+command! -nargs=0 GdbFinish         call neobugger#gdb#Handle('Send',  "finish")
+command! -nargs=0 GdbUntil          call neobugger#gdb#Handle('TBreak')
+command! -nargs=0 GdbFrameUp        call neobugger#gdb#Handle('FrameUp')
+command! -nargs=0 GdbFrameDown      call neobugger#gdb#Handle('FrameDown')
+command! -nargs=0 GdbInterrupt      call neobugger#gdb#Handle('Interrupt')
+command! -nargs=0 GdbRefresh        call neobugger#gdb#Handle('Send',  "info line")
+command! -nargs=0 GdbInfoLocal      call neobugger#gdb#Handle('Send',  "info local")
+command! -nargs=0 GdbInfoBreak      call neobugger#gdb#Handle('Send',  "info break")
+command! -nargs=0 GdbEvalWord       call neobugger#gdb#Handle('Eval',  expand('<cword>'))
+command! -nargs=0 GdbWatchWord      call neobugger#gdb#Handle('Watch', expand('<cword>')
 
-command! -nargs=0 GdbDebugStop call neobugger#Handle('current', 'Kill')
-command! -nargs=0 GdbToggleBreak call neobugger#Handle('current', 'ToggleBreak')
-command! -nargs=0 GdbToggleBreakAll call neobugger#Handle('current', 'ToggleBreakAll')
-command! -nargs=0 GdbClearBreak call neobugger#Handle('current', 'ClearBreak')
-command! -nargs=0 GdbContinue call neobugger#Handle('current', 'Send', 'c')
-command! -nargs=0 GdbNext call neobugger#Handle('current', 'Next')
-command! -nargs=0 GdbStep call neobugger#Handle('current', 'Step')
-command! -nargs=0 GdbFinish call neobugger#Handle('current', 'Send', "finish")
-"command! -nargs=0 GdbUntil call neobugger#Handle('current', 'Send', "until ". line('.'))
-command! -nargs=0 GdbUntil call neobugger#Handle('current', 'TBreak')
-command! -nargs=0 GdbFrameUp call neobugger#Handle('current', 'FrameUp')
-command! -nargs=0 GdbFrameDown call neobugger#Handle('current', 'FrameDown')
-command! -nargs=0 GdbInterrupt call neobugger#Handle('current', 'Interrupt')
-command! -nargs=0 GdbRefresh call neobugger#Handle('current', 'Send', "info line")
-command! -nargs=0 GdbInfoLocal call neobugger#Handle('current', 'Send', "info local")
-command! -nargs=0 GdbInfoBreak call neobugger#Handle('current', 'Send', "info break")
-command! -nargs=0 GdbEvalWord call neobugger#Handle('current', 'Eval', expand('<cword>'))
-command! -range -nargs=0 GdbEvalRange call neobugger#Handle('current', 'Eval', nelib#util#get_visual_selection())
-command! -nargs=0 GdbWatchWord call neobugger#Handle('current', 'Watch', expand('<cword>')
-command! -range -nargs=0 GdbWatchRange call neobugger#Handle('current', 'Watch', nelib#util#get_visual_selection())
+command! -range -nargs=0 GdbEvalRange  call neobugger#gdb#Handle('Eval',  nelib#util#get_visual_selection())
+command! -range -nargs=0 GdbWatchRange call neobugger#gdb#Handle('Watch', nelib#util#get_visual_selection())
 " }}}
 
 
@@ -110,6 +97,9 @@ endif
 
 " Customization options {{{1
 "
+if !exists("g:neobugger_addr")
+    let g:neobugger_addr = '/tmp/nvim.gdb'
+endif
 if !exists("g:gdb_require_enter_after_toggling_breakpoint")
     let g:gdb_require_enter_after_toggling_breakpoint = 0
 endif
@@ -137,7 +127,7 @@ function! NeobuggerCommandStr()
         endif
     else
         let s:gdb_local_remote = 1
-        return 'Nbgdb t1'
+        return 'GdbStart /tmp/nvim.gdb'
     endif
 endfunction
 
