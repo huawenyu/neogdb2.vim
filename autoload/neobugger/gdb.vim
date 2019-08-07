@@ -133,9 +133,12 @@ function! neobugger#gdb#New(args)
 
     if win_gotoid(gdb._wid_main) == 1
         stopinsert
-        "call serverstart(gdb._serveraddr)
-        call gdb.Map("nmap")
         let g:gdbserver = deepcopy(gdb)
+
+        call serverstart(gdb._serveraddr)
+        call gdb.Map("nmap")
+        execute("VwmOpen gdb")
+
         return g:gdbserver
     else
         silent! call s:log.trace("  Cann't jump back 'main' window.")
@@ -183,6 +186,11 @@ function! s:prototype.RefreshBreakpointSigns(mode)
     for [next_key, next_val] in items(s:breakpoints)
         let buf = bufnr(next_val['file'])
         let linenr = next_val['line']
+
+        silent! call s:log.debug("RefreshBreakpointSigns buf=" .buf)
+        if buf < 0
+            return
+        endif
 
         if a:mode == 1 && next_val['change']
            \ && has_key(next_val, 'sign_id')
@@ -332,13 +340,7 @@ function! s:prototype.Jump(file, line)
         call delete(s:gdb_bt_qf)
     endif
 
-    let cwindow = win_getid()
-    if cwindow != g:gdbserver._wid_main
-        if win_gotoid(g:gdbserver._wid_main) != 1
-            return
-        endif
-    endif
-    stopinsert
+    call self._focus_main()
 
     let self._current_buf = bufnr('%')
     let target_buf = bufnr(a:file, 1)
@@ -359,9 +361,7 @@ function! s:prototype.Jump(file, line)
     "exec ':' a:line | m'
 
     let self._current_line = a:line
-    if cwindow != g:gdbserver._wid_main
-        call win_gotoid(cwindow)
-    endif
+    call self._focus_main()
     call self.Update_current_line_sign(1)
 endfunction
 
@@ -520,7 +520,9 @@ function! s:prototype.FrameDown()
 endfunction
 
 function! s:prototype.Next()
+    call self.Send("silent_on")
     call self.Send("next")
+    call self.Send("silent_off")
 endfunction
 
 function! s:prototype.Step()
@@ -692,6 +694,17 @@ function! s:prototype.init_gdb_env()
 
 endfunction
 
+function! s:prototype._focus_main()
+    let cwindow = win_getid()
+    if cwindow != g:gdbserver._wid_main
+        if win_gotoid(g:gdbserver._wid_main) != 1
+            stopinsert
+            return
+        endif
+    endif
+    stopinsert
+endfunction
+
 function! s:prototype.on_init(...)
     let l:__func__ = "gdb.on_init"
     silent! call s:log.info(l:__func__, " args=", string(a:000))
@@ -702,7 +715,22 @@ function! s:prototype.on_init(...)
     endif
 
     let self._initialized = 1
+    let self._autorun = 0
     "call self.init_gdb_env()
+
+
+    " Load all files from backtrace to solve relative-path
+    call self._focus_main()
+    silent! call s:log.trace("Load open files ...")
+    silent! call s:log.trace("  try open files from ". s:fl_file)
+    if filereadable(s:fl_file)
+        call self.ReadVariable("s:file_list", s:fl_file)
+        for [next_key, next_val] in items(s:file_list)
+            if filereadable(next_key)
+                exec "e ". fnamemodify(next_key, ':p:.')
+            endif
+        endfor
+    endif
 
     silent! call s:log.info("Load breaks ...")
     if filereadable(s:brk_file)
@@ -710,10 +738,14 @@ function! s:prototype.on_init(...)
     endif
 
     silent! call s:log.info("Load set breaks ...")
+    call self._focus_main()
     if !empty(s:breakpoints)
         call self.Breaks2Qf()
+    silent! call s:log.info("Load set breaks2 ...")
         call self.RefreshBreakpointSigns(0)
+    silent! call s:log.info("Load set breaks3 ...")
         call self.RefreshBreakpoints(0)
+    silent! call s:log.info("Load set breaks4 ...")
     endif
 
     if has_key(self, 'Init')

@@ -97,6 +97,5 @@ endfunction
 
 
 function! s:prototype.on_continue(...)
-    call state#Switch('gdb', 'running', 0)
     call self.Update_current_line_sign(0)
 endfunction
