@@ -1,0 +1,53 @@
+---
+# Root layout
+layout: even-vertical
+
+# Root window options
+# pane-border-status: bottom
+pane-border-status: top
+
+# List of windows
+windows:
+  ## The 1st window: Name only, no panes
+  #- empty, named window
+
+  - Gdb:                    # Name of the window
+      layout: main-vertical # Window layout, overrides root layout
+      panes:                # List of panes
+        - Code:
+          - NVIM_LISTEN_ADDRESS=/tmp/nvim.trace nvim
+        - Dashboard:
+          -
+        - Gef:
+          - sleep 1
+
+          - gdb -nx -quiet -iex 'set verbose off' -iex 'set confirm off' -iex 'set pagination off' -iex 'set mi-async on'
+
+          - expect: '(gdb) '
+          - set width 0
+          - set height 0
+          - handle SIGUSR1 nostop noignore noprint
+          - handle SIGUSR2 nostop noignore noprint
+          - handle SIGPIPE nostop noignore noprint
+          - handle SIG34   nostop noignore noprint
+
+          - define skip
+          -   tbreak +1
+          -   jump +1
+          - end
+
+          - source {{ $NEOGDB_DIR }}bin/gdbinit_gef.py
+
+          - expect: 'gef➤'
+          - gef config context.enable True
+          - gef config gef.disable_target_remote_overwrite True
+          - gef config gef.autosave_breakpoints_file ".gdb_breakpints"
+          - gef config context.layout "legend regs stack code args source trace extra memory"
+
+          - expect: 'gef➤'
+          - tmux
+
+          - file {{$NEOBUGGER_FILE}}
+          - br main
+          - run
+
