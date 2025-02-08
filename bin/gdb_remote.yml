@@ -17,17 +17,18 @@ windows:
         - Code:
           - NVIM_LISTEN_ADDRESS=/tmp/nvim.trace nvim
         - Console:
-          - sleep 10
-          - dut_ctl.exp --dut {{$NEOBUGGER_HOST}} --prompt "{{$NEOBUGGER_PROMPT}} (.*)#" --action "gdb" --gdb "Gef" --remote "gef-remote {{$NEOBUGGER_ADDR}} {{$NEOBUGGER_PORT}}"
+          - sleep 8
+          - dut_ctl.exp --dut {{$NEOBUGGER_HOST}} --prompt "{{$NEOBUGGER_PROMPT}} (.*)#" --action "gdb" --gdb "Gef"
         - Dashboard:
           -
         - Gef:
-          - sleep 1
-
           - gdb -nx -quiet -iex 'set verbose off' -iex 'set confirm off' -iex 'set pagination off' -iex 'set mi-async on'
 
           - expect: '(gdb) '
           - set verbose off
+          - set auto-solib-add off
+          #- set solib-search-path <path>
+          - set sysroot "./lib/x86_64/"
           - set width 0
           - set height 0
           - handle SIGUSR1 nostop noignore noprint
@@ -41,7 +42,14 @@ windows:
           - end
 
           - file {{$NEOBUGGER_FILE}}
+          - source ".gdb_breakpints"
 
+          - expect: 'help remote-listening'
+          - target remote {{$NEOBUGGER_ADDR}}:{{$NEOBUGGER_PORT}}
+
+          - shell sleep 3
+          - ;
+          - expect: '(gdb)'
           - source {{ $NEOGDB_DIR }}bin/gdbinit_gef.py
           - expect: 'gef➤'
           - tmux
