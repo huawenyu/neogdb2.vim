@@ -18,7 +18,7 @@ windows:
           - NVIM_LISTEN_ADDRESS=/tmp/nvim.trace nvim
         - Console:
           - sleep 8
-          - dut_ctl.exp --dut {{$NEOBUGGER_HOST}} --prompt "{{$NEOBUGGER_PROMPT}} (.*)#" --action "gdb" --gdb "Gef"
+          - dutctl.exp --dut {{$NEOBUGGER_HOST}} --prompt "{{$NEOBUGGER_PROMPT}} (.*)#" --action "gdb" --gdb "Gef"
         - Dashboard:
           -
         - Gef:
