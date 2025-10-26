@@ -2,6 +2,10 @@
 Vim GDB front-end for neovim: https://github.com/huawenyu/neogdb.vim  
 The code reference: https://github.com/neovim/neovim/blob/master/contrib/gdb/neovim_gdb.vim  
 
+```
+./bin/gdbinit_gef.py   ### Download from https://github.com/hugsy/gef, then patch ./bin/gef.patch
+```
+
 ## feature
   - gdb commands maps: next, step, finish, continue, etc.
   - breakpoints:
