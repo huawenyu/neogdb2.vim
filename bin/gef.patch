@@ -1,0 +1,289 @@
+--- /home/hyu/share/gef.py	2025-10-25 20:22:40.676614541 -0700
++++ /home/hyu/.config/nvim/bundle/neogdb2.vim/bin/gdbinit_gef.py	2025-10-25 11:27:45.374852114 -0700
+@@ -88,10 +88,94 @@
+                     Union, cast)
+ from urllib.request import urlopen
+ 
++import logging
++import neovim
++import threading
++import queue
++import time
++import random
++
++# Configure the logging system
++logging.basicConfig(
++    level=logging.DEBUG,         # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
++    filename='/tmp/app.log',          # Log file name
++    filemode='w',
++    buffering=0,
++    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'  # Log format
++)
++
++# Example log messages
++logging.debug('This is a debug message')
+ 
+ GEF_DEFAULT_BRANCH                     = "main"
+ GEF_EXTRAS_DEFAULT_BRANCH              = "main"
+ 
++g_runCtx_exiting = False
++
++
++class NormalReturn(Exception):
++   """Base class for other exceptions"""
++   pass
++
++class NeovimNone(Exception):
++   """Base class for other exceptions"""
++   pass
++
++def get_nvim_instance(vim_server_addr):
++    try:
++        # Embed neovim into your python application instead of binding to a running neovim instance.
++        #nvim = neovim.attach('child', argv=["/bin/env", "nvim", "--embed"])
++
++        # Create a python API session attached to unix domain socket created above:
++        path = vim_server_addr
++        print("Attach path={}".format(vim_server_addr))
++        nvim = neovim.attach('socket', path=vim_server_addr)
++        print("nvim={}".format(nvim))
++        return path, nvim
++    except Exception as e:
++        pass
++    return path, None
++
++# f_cnt, tag_cnt, {file:{line:function, }, }
++def nvim_async_task(task):
++    task_queue.put(task)  # Add item to the queue
++
++    #  have_repstr = False
++    #  for (k_file, v_line_func) in tqdm(dict_result.items(), desc='Files'):
++    #      nvim.command('e ' + k_file)
++    #      nvim.command("w")
++    #      if config['action'] == 'add':
++    #          for (k_line, v_func) in tqdm(v_line_func.items(), desc='Functions', leave=False):
++    #              nvim.command(k_line)
++    #              nvim.command("call search('{', 'cW')")
++    #              if not have_repstr:
++    #                  nvim.command("s/{/{" + config['our_trace_tag'] + "/e")
++    #              else:
++    #                  nvim.command("&")
++    #      elif config['action'] == 'clean':
++    #          nvim.command("%s/{" + config['our_trace_tag'] + "/{/ge")
++    #      nvim.command("w")
++
++
++
++def nvim_executor(task_queue, consumer_id):
++    global g_runCtx_exiting
++
++    while not g_runCtx_exiting:
++        try:
++            item = task_queue.get(timeout=1)  # Wait for an item (timeout to exit gracefully)
++            if item['enum'] == "file":
++                nvim.command(f"call neobugger#Jump('{item['file']}', {item['line']})")
++            elif item['enum'] == "cmd":
++                nvim.command(item['cmd'])
++
++            #  print(f"Consumer-{consumer_id} consumed: {item}")
++            #  time.sleep(random.uniform(0.2, 0.7))  # Simulate processing time
++            #  task_queue.task_done()  # Mark the task as done
++        except queue.Empty:
++            continue
++
++
+ def http_get(url: str) -> Optional[bytes]:
+     """Basic HTTP wrapper for GET request. Return the body of the page if HTTP code is OK,
+     otherwise return None."""
+@@ -144,6 +228,7 @@
+ GEF_PROMPT                             = "gef➤  "
+ GEF_PROMPT_ON                          = f"\001\033[1;32m\002{GEF_PROMPT}\001\033[0m\002"
+ GEF_PROMPT_OFF                         = f"\001\033[1;31m\002{GEF_PROMPT}\001\033[0m\002"
++NVIM_Breakpoints                       = ".gdb_breakpoint"
+ 
+ __registered_commands__ : Set[Type["GenericCommand"]]                                        = set()
+ __registered_functions__ : Set[Type["GenericFunction"]]                                      = set()
+@@ -3619,9 +3704,11 @@
+ 
+ def exit_handler(_: "gdb.events.ExitedEvent") -> None:
+     """GDB event handler for exit cases."""
+-    global gef
++    global gef, g_runCtx_exiting
++
+     # flush the caches
+     reset_all_caches()
++    g_runCtx_exiting = True
+ 
+     # disconnect properly the remote session
+     gef.session.qemu_mode = False
+@@ -7799,6 +7886,9 @@
+         filename_line = f"{file_name}:{line_number}"
+         return any(filename_line in loc for loc in bp_locations)
+ 
++    def nvim_dump_breakpoint2quickfix(self, filename, line_number, column_number, message):
++        return f"{filename}:{line_number}:{column_number}:{message}"
++
+     def context_source(self) -> None:
+         try:
+             pc = gef.arch.pc
+@@ -7810,14 +7900,55 @@
+                 return
+ 
+             fpath = symtab.fullname()
+-            with open(fpath, "r") as f:
+-                lines = [l.rstrip() for l in f.readlines()]
++            nvim_async_task({ 'enum': 'file',
++                         'file': fpath,
++                         'line': line_num+1,
++                         })
++
++            #  with open(fpath, "r") as f:
++            #      lines = [l.rstrip() for l in f.readlines()]
++            #  logging.debug(f"{fpath}:{line_num}")
+ 
+         except Exception:
+             return
+ 
+         file_base_name = os.path.basename(symtab.filename)
+         breakpoints = gdb.breakpoints() or []
++
++        # Write to a vim.quickfix file
++        if len(breakpoints) > 0:
++            with open(f"{NVIM_Breakpoints}", "w") as f:
++                for bp in breakpoints:
++                    location = bp.location
++                    parts = location.split(':')
++                    parts_sz = len(parts)
++                    if parts_sz == 2:
++                        filename = parts[0]
++                        line_number = parts[1]
++                    elif parts_sz == 1:
++                        filename = parts[0]
++                        line_number = 0
++
++                    msg = f"{bp.enabled} ID={bp.number} hit-{bp.hit_count} cond-{bp.condition}"
++                    output_line = self.nvim_dump_breakpoint2quickfix(
++                            filename,
++                            line_number,
++                            0,
++                            msg
++                            )
++                    f.write(output_line + "\n")
++
++            # Inspect the breakpoint
++            #  print(f"Location: {bp.location}")  # Location of the breakpoint
++            #  print(f"Enabled: {bp.enabled}")    # Whether the breakpoint is enabled
++            #  print(f"Silent: {bp.silent}")      # Whether the breakpoint is silent
++            #  print(f"Thread: {bp.thread}")      # Thread ID (or None if not thread-specific)
++            #  print(f"Hit Count: {bp.hit_count}")  # Number of times the breakpoint has been hit
++            #  print(f"Condition: {bp.condition}")  # Condition associated with the breakpoint
++            #  print(f"Is Valid: {bp.is_valid}")  # Whether the breakpoint is still valid
++
++        return
++
+         bp_locations = [b.location for b in breakpoints if b.location and file_base_name in b.location]
+         past_lines_color = gef.config["theme.old_context"]
+ 
+@@ -10321,17 +10452,31 @@
+         warn("Not in a tmux/screen session")
+         return
+ 
+-    def tmux_setup(self) -> None:
+-        """Prepare the tmux environment by vertically splitting the current pane, and
+-        forcing the context to be redirected there."""
++    def create_pane_by_title(self, title):
++        # Use tmux to list panes and pipe the output to grep to search for the title
+         tmux = which("tmux")
+-        ok("tmux session found, splitting window...")
++        command = f"tmux list-panes -F '#{{session_name}}:#{{window_index}}.#{{pane_index}}-#{{pane_tty}}-#{{pane_title}}' | grep -w '{title}'"
++        result = subprocess.run(command, shell=True, capture_output=True, text=True)
++        if result.returncode == 0:
++            pane, pty, _ = result.stdout.strip().split("-")
++        else:
++            pane, pty, _ = subprocess.check_output([tmux, "splitw", "-h", '-F#{session_name}:#{window_index}.#{pane_index}-#{pane_tty}-#{pane_title}',
++                                                "-P", ";", "select-pane", "-T", "Dashboard"
++                                                ]).decode().strip().split("-")
+ 
+-        pane, pty = subprocess.check_output([tmux, "splitw", "-h", '-F#{session_name}:#{window_index}.#{pane_index}-#{pane_tty}', "-P"]).decode().strip().split("-")
+         atexit.register(lambda : subprocess.run([tmux, "kill-pane", "-t", pane]))
+         # clear the screen and let it wait for input forever
+         gdb.execute(f"!'{tmux}' send-keys -t {pane} 'clear ; cat' C-m")
+         gdb.execute(f"!'{tmux}' select-pane -L")
++        return pane, pty
++
++
++    def tmux_setup(self) -> None:
++        """Prepare the tmux environment by vertically splitting the current pane, and
++        forcing the context to be redirected there."""
++        ok("tmux session found, splitting window...")
++
++        pane, pty = self.create_pane_by_title('Dashboard')
+ 
+         ok(f"Setting `context.redirect` to '{pty}'...")
+         gdb.execute(f"gef config context.redirect {pty}")
+@@ -11413,11 +11558,21 @@
+         "set confirm off",
+         "set verbose off",
+         "set pagination off",
+-        "set print elements 0",
++        "set print elements 1024",
+         "set history save on",
+         f"set history filename {os.getenv('GDBHISTFILE', '~/.gdb_history')}",
+         "set output-radix 0x10",
+         "set print pretty on",
++        "set print array on",
++        "set print array-indexes on",
++        "set print symbol-filename on",
++        "set print null-stop on",
++        "set print sevenbit-strings on",
++        "set print union on",
++        "set print demangle on",
++        "set print object on",
++        "set print static-members off",
++        "set print vtbl on",
+         "set disassembly-flavor intel",
+         "handle SIGALRM print nopass",
+     )
+@@ -11440,6 +11595,37 @@
+     # setup gdb prompt
+     gdb.prompt_hook = __gef_prompt__
+ 
++    # Create a shared queue
++    task_queue = queue.Queue(maxsize=10)  # Set a maximum size to limit queue growth
++    path, nvim = get_nvim_instance('/tmp/nvim.trace')
++    if nvim is None:
++        os.system('rm -fr ' + path)
++        path, nvim = get_nvim_instance('/tmp/nvim.trace')
++    if nvim is None:
++        raise NeovimNone
++
++    # Create producer and consumer threads
++    nvim_editor = threading.Thread(target=nvim_executor, args=(task_queue, 1))
++
++    # Start all threads
++    nvim_editor.start()
++    nvim_async_task({ 'enum': 'cmd',
++                 'cmd': 'VimuxOpenRunner "Gef"',
++                 })
++
++    nvim_async_task({ 'enum': 'cmd',
++                 'cmd': 'call neobugger#Map()',
++                 })
++
++    nvim_async_task({ 'enum': 'cmd',
++                 'cmd': 'call neobugger#New()',
++                 })
++
++    #  # Wait for all producers to finish
++    #  nvim_editor.join()
++    #  # Wait for the queue to be empty
++    #  task_queue.join()  # Ensure all tasks are processed
++
+     # gdb events configuration
+     gef_on_continue_hook(continue_handler)
+     gef_on_stop_hook(hook_stop_handler)
+@@ -11490,3 +11676,4 @@
+     # Add a `source` post hook to force gef to recheck the registered plugins and
+     # eventually load the missing one(s)
+     gdb.execute("define hookpost-source\npi gef.gdb.load()\nend")
++
